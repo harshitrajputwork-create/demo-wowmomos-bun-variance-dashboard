@@ -1,0 +1,596 @@
+#!/usr/bin/env python3
+"""
+Custom Report Script
+Purpose: Wow Momos - Bun Variance Report (pilot demo). Daily closing bun count vs POS-expected usage.
+Data:    Self-contained. Sample store submissions are embedded below (SAMPLE_ROWS); no API or blob
+         calls are made. Form: IPLFORM564.
+Sandbox-compliant: whitelisted imports only; no os/sys/pathlib/azure/subprocess/traceback;
+no leading-underscore identifiers anywhere; no __name__ guard.
+
+Form logic (per store, per day):
+  Buns sold        = burgers sold (POS) x 2
+  Opening          = "Bun remaining for this month"
+  Expected closing = Opening - Buns sold
+  Actual closing   = physical count entered by store
+  Variance         = Expected closing - Actual closing   (+ve shortage, -ve surplus)
+Row keys: id=Submission Id, d=date, st=store, ar=area, ct=city, by=submitted by, bg=burgers, so=buns sold,
+op=opening, ex=expected closing, ac=actual closing, v=variance, cm=store comment, fs=filing status, ms=missed (1/0)
+"""
+import json
+from datetime import datetime, timedelta
+
+BRAND_NAME          = "Wow Momos"
+PROCESS_NAME        = "Bun Variance Report"
+FORM_CODE           = "IPLFORM564"
+DEFAULT_OUTPUT_FILE = "output.html"
+
+SAMPLE_ROWS = [
+    {"id": "IPLF5021", "d": "2026-09-01", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 129, "so": 258, "op": 9600, "ex": 9342, "ac": 9340, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4949", "d": "2026-09-01", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 149, "so": 298, "op": 10800, "ex": 10502, "ac": 10502, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4925", "d": "2026-09-01", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 159, "so": 318, "op": 12300, "ex": 11982, "ac": 11982, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4997", "d": "2026-09-01", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 178, "so": 356, "op": 11100, "ex": 10744, "ac": 10744, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4901", "d": "2026-09-01", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 196, "so": 392, "op": 14000, "ex": 13608, "ac": 13608, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4973", "d": "2026-09-01", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 206, "so": 412, "op": 13900, "ex": 13488, "ac": 13488, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5022", "d": "2026-09-02", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 131, "so": 262, "op": 9340, "ex": 9078, "ac": 9078, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4950", "d": "2026-09-02", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 158, "so": 316, "op": 10502, "ex": 10186, "ac": 10185, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4926", "d": "2026-09-02", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 168, "so": 336, "op": 11982, "ex": 11646, "ac": 11646, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4998", "d": "2026-09-02", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 166, "so": 332, "op": 10744, "ex": 10412, "ac": 10409, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4902", "d": "2026-09-02", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 180, "so": 360, "op": 13608, "ex": 13248, "ac": 13247, "v": 1, "cm": "", "fs": "DELAYED", "ms": 0},
+    {"id": "IPLF4974", "d": "2026-09-02", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 194, "so": 388, "op": 13488, "ex": 13100, "ac": 13100, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5023", "d": "2026-09-03", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 128, "so": 256, "op": 9078, "ex": 8822, "ac": 8815, "v": 7, "cm": "Expired buns from old batch discarded, 7 buns", "fs": "DELAYED", "ms": 0},
+    {"id": "IPLF4951", "d": "2026-09-03", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 152, "so": 304, "op": 10185, "ex": 9881, "ac": 9881, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4927", "d": "2026-09-03", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 158, "so": 316, "op": 11646, "ex": 11330, "ac": 11330, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4999", "d": "2026-09-03", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 159, "so": 318, "op": 10409, "ex": 10091, "ac": 10091, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4903", "d": "2026-09-03", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 190, "so": 380, "op": 13247, "ex": 12867, "ac": 12864, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4975", "d": "2026-09-03", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 207, "so": 414, "op": 13100, "ex": 12686, "ac": 12685, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5024", "d": "2026-09-04", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 146, "so": 292, "op": 8815, "ex": 8523, "ac": 8522, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4952", "d": "2026-09-04", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 178, "so": 356, "op": 9881, "ex": 9525, "ac": 9523, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4928", "d": "2026-09-04", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 190, "so": 380, "op": 11330, "ex": 10950, "ac": 10948, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5000", "d": "2026-09-04", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 205, "so": 410, "op": 10091, "ex": 9681, "ac": 9679, "v": 2, "cm": "", "fs": "DELAYED", "ms": 0},
+    {"id": "IPLF4904", "d": "2026-09-04", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 234, "so": 468, "op": 12864, "ex": 12396, "ac": 12396, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4976", "d": "2026-09-04", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 227, "so": 454, "op": 12685, "ex": 12231, "ac": 12230, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "", "d": "2026-09-05", "st": "WOW Momos - Electronic City", "ar": "", "ct": "", "by": "", "bg": 158, "so": 316, "op": None, "ex": None, "ac": None, "v": None, "cm": "", "fs": "MISSED", "ms": 1},
+    {"id": "IPLF4953", "d": "2026-09-05", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 183, "so": 366, "op": 9523, "ex": 9157, "ac": 9154, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4929", "d": "2026-09-05", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 194, "so": 388, "op": 10948, "ex": 10560, "ac": 10558, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5001", "d": "2026-09-05", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 202, "so": 404, "op": 9679, "ex": 9275, "ac": 9275, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4905", "d": "2026-09-05", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 216, "so": 432, "op": 12396, "ex": 11964, "ac": 11962, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4977", "d": "2026-09-05", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 233, "so": 466, "op": 12230, "ex": 11764, "ac": 11761, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5026", "d": "2026-09-06", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 148, "so": 296, "op": 8206, "ex": 7910, "ac": 7899, "v": 11, "cm": "Yesterday's entry missed, counted today", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4954", "d": "2026-09-06", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 176, "so": 352, "op": 9154, "ex": 8802, "ac": 8842, "v": -40, "cm": "Received 40 buns from Koramangala store (inter-store transfer), not logged", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4930", "d": "2026-09-06", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 193, "so": 386, "op": 10558, "ex": 10172, "ac": 10169, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5002", "d": "2026-09-06", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 195, "so": 390, "op": 9275, "ex": 8885, "ac": 8885, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4906", "d": "2026-09-06", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 219, "so": 438, "op": 11962, "ex": 11524, "ac": 11522, "v": 2, "cm": "", "fs": "DELAYED", "ms": 0},
+    {"id": "IPLF4978", "d": "2026-09-06", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 223, "so": 446, "op": 11761, "ex": 11315, "ac": 11315, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5027", "d": "2026-09-07", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 128, "so": 256, "op": 7899, "ex": 7643, "ac": 7643, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4955", "d": "2026-09-07", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 146, "so": 292, "op": 8842, "ex": 8550, "ac": 8547, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4931", "d": "2026-09-07", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 158, "so": 316, "op": 10169, "ex": 9853, "ac": 9853, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5003", "d": "2026-09-07", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 175, "so": 350, "op": 8885, "ex": 8535, "ac": 8535, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4907", "d": "2026-09-07", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 199, "so": 398, "op": 11522, "ex": 11124, "ac": 11122, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4979", "d": "2026-09-07", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 188, "so": 376, "op": 11315, "ex": 10939, "ac": 10939, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5028", "d": "2026-09-08", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 129, "so": 258, "op": 7643, "ex": 7385, "ac": 7385, "v": 0, "cm": "", "fs": "DELAYED", "ms": 0},
+    {"id": "IPLF4956", "d": "2026-09-08", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 142, "so": 284, "op": 8547, "ex": 8263, "ac": 8263, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4932", "d": "2026-09-08", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 171, "so": 342, "op": 9853, "ex": 9511, "ac": 9489, "v": 22, "cm": "18 buns wasted in new staff training and 4 got over cooked", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5004", "d": "2026-09-08", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 167, "so": 334, "op": 8535, "ex": 8201, "ac": 8201, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4908", "d": "2026-09-08", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 192, "so": 384, "op": 11122, "ex": 10738, "ac": 10736, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4980", "d": "2026-09-08", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 199, "so": 398, "op": 10939, "ex": 10541, "ac": 10541, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5029", "d": "2026-09-09", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 138, "so": 276, "op": 7385, "ex": 7109, "ac": 7109, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4957", "d": "2026-09-09", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 140, "so": 280, "op": 8263, "ex": 7983, "ac": 7980, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4933", "d": "2026-09-09", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 164, "so": 328, "op": 9489, "ex": 9161, "ac": 9145, "v": 16, "cm": "Training day 2: 12 buns wasted while practising assembly, 4 over-toasted", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5005", "d": "2026-09-09", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 181, "so": 362, "op": 8201, "ex": 7839, "ac": 7837, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4909", "d": "2026-09-09", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 188, "so": 376, "op": 10736, "ex": 10360, "ac": 10357, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4981", "d": "2026-09-09", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 207, "so": 414, "op": 10541, "ex": 10127, "ac": 10125, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5030", "d": "2026-09-10", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 133, "so": 266, "op": 7109, "ex": 6843, "ac": 6843, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4958", "d": "2026-09-10", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 155, "so": 310, "op": 7980, "ex": 7670, "ac": 7667, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4934", "d": "2026-09-10", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 176, "so": 352, "op": 9145, "ex": 8793, "ac": 8784, "v": 9, "cm": "Training day 3: 9 buns wasted during assembly practice", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5006", "d": "2026-09-10", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 161, "so": 322, "op": 7837, "ex": 7515, "ac": 7512, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4910", "d": "2026-09-10", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 199, "so": 398, "op": 10357, "ex": 9959, "ac": 9957, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4982", "d": "2026-09-10", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 188, "so": 376, "op": 10125, "ex": 9749, "ac": 9749, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "", "d": "2026-09-11", "st": "WOW Momos - Electronic City", "ar": "", "ct": "", "by": "", "bg": 150, "so": 300, "op": None, "ex": None, "ac": None, "v": None, "cm": "", "fs": "MISSED", "ms": 1},
+    {"id": "IPLF4959", "d": "2026-09-11", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 179, "so": 358, "op": 7667, "ex": 7309, "ac": 7327, "v": -18, "cm": "Received 18 buns from Koramangala store, transfer not logged", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4935", "d": "2026-09-11", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 212, "so": 424, "op": 8784, "ex": 8360, "ac": 8360, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5007", "d": "2026-09-11", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 255, "so": 510, "op": 7512, "ex": 7002, "ac": 7002, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4911", "d": "2026-09-11", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 229, "so": 458, "op": 9957, "ex": 9499, "ac": 9499, "v": 0, "cm": "", "fs": "DELAYED", "ms": 0},
+    {"id": "IPLF4983", "d": "2026-09-11", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 245, "so": 490, "op": 9749, "ex": 9259, "ac": 9259, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "", "d": "2026-09-12", "st": "WOW Momos - Electronic City", "ar": "", "ct": "", "by": "", "bg": 161, "so": 322, "op": None, "ex": None, "ac": None, "v": None, "cm": "", "fs": "MISSED", "ms": 1},
+    {"id": "IPLF4960", "d": "2026-09-12", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 190, "so": 380, "op": 7327, "ex": 6947, "ac": 6946, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4936", "d": "2026-09-12", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 196, "so": 392, "op": 8360, "ex": 7968, "ac": 7965, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5008", "d": "2026-09-12", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 254, "so": 508, "op": 7002, "ex": 6494, "ac": 6494, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4912", "d": "2026-09-12", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 231, "so": 462, "op": 9499, "ex": 9037, "ac": 9023, "v": 14, "cm": "Tray dropped during evening rush, 14 buns unusable", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4984", "d": "2026-09-12", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 243, "so": 486, "op": 9259, "ex": 8773, "ac": 8773, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5033", "d": "2026-09-13", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 153, "so": 306, "op": 6221, "ex": 5915, "ac": 5898, "v": 17, "cm": "Missed 2 days of entry, counted today", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4961", "d": "2026-09-13", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 182, "so": 364, "op": 6946, "ex": 6582, "ac": 6581, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4937", "d": "2026-09-13", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 195, "so": 390, "op": 7965, "ex": 7575, "ac": 7575, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5009", "d": "2026-09-13", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 277, "so": 554, "op": 6494, "ex": 5940, "ac": 5929, "v": 11, "cm": "Festival rush - buns overcooked on grill during peak, 11 wasted", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4913", "d": "2026-09-13", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 234, "so": 468, "op": 9023, "ex": 8555, "ac": 8553, "v": 2, "cm": "", "fs": "DELAYED", "ms": 0},
+    {"id": "IPLF4985", "d": "2026-09-13", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 229, "so": 458, "op": 8773, "ex": 8315, "ac": 8315, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5034", "d": "2026-09-14", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 137, "so": 274, "op": 5898, "ex": 5624, "ac": 5624, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4962", "d": "2026-09-14", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 142, "so": 284, "op": 6581, "ex": 6297, "ac": 6294, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4938", "d": "2026-09-14", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 160, "so": 320, "op": 7575, "ex": 7255, "ac": 7255, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5010", "d": "2026-09-14", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 228, "so": 456, "op": 5929, "ex": 5473, "ac": 5473, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4914", "d": "2026-09-14", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 194, "so": 388, "op": 8553, "ex": 8165, "ac": 8165, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4986", "d": "2026-09-14", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 212, "so": 424, "op": 8315, "ex": 7891, "ac": 7885, "v": 6, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5035", "d": "2026-09-15", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 137, "so": 274, "op": 5624, "ex": 5350, "ac": 5349, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4963", "d": "2026-09-15", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 158, "so": 316, "op": 6294, "ex": 5978, "ac": 5990, "v": -12, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4939", "d": "2026-09-15", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 176, "so": 352, "op": 7255, "ex": 6903, "ac": 6903, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5011", "d": "2026-09-15", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 235, "so": 470, "op": 5473, "ex": 5003, "ac": 5003, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4915", "d": "2026-09-15", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 200, "so": 400, "op": 8165, "ex": 7765, "ac": 7763, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4987", "d": "2026-09-15", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 200, "so": 400, "op": 7885, "ex": 7485, "ac": 7476, "v": 9, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5036", "d": "2026-09-16", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 121, "so": 242, "op": 5349, "ex": 5107, "ac": 5107, "v": 0, "cm": "", "fs": "DELAYED", "ms": 0},
+    {"id": "IPLF4964", "d": "2026-09-16", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 155, "so": 310, "op": 5990, "ex": 5680, "ac": 5668, "v": 12, "cm": "Recount done - yesterday's count was 12 high", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4940", "d": "2026-09-16", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 160, "so": 320, "op": 6903, "ex": 6583, "ac": 6580, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5012", "d": "2026-09-16", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 234, "so": 468, "op": 5003, "ex": 4535, "ac": 4532, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4916", "d": "2026-09-16", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 190, "so": 380, "op": 7763, "ex": 7383, "ac": 7381, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4988", "d": "2026-09-16", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 213, "so": 426, "op": 7476, "ex": 7050, "ac": 7037, "v": 13, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5037", "d": "2026-09-17", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 129, "so": 258, "op": 5107, "ex": 4849, "ac": 4849, "v": 0, "cm": "", "fs": "DELAYED", "ms": 0},
+    {"id": "IPLF4965", "d": "2026-09-17", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 148, "so": 296, "op": 5668, "ex": 5372, "ac": 5371, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4941", "d": "2026-09-17", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 180, "so": 360, "op": 6580, "ex": 6220, "ac": 6217, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5013", "d": "2026-09-17", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 229, "so": 458, "op": 4532, "ex": 4074, "ac": 4065, "v": 9, "cm": "Buns burnt during rush hour, 9 wasted", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4917", "d": "2026-09-17", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 191, "so": 382, "op": 7381, "ex": 6999, "ac": 6997, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4989", "d": "2026-09-17", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 213, "so": 426, "op": 7037, "ex": 6611, "ac": 6594, "v": 17, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5038", "d": "2026-09-18", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 163, "so": 326, "op": 4849, "ex": 4523, "ac": 4520, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4966", "d": "2026-09-18", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 180, "so": 360, "op": 5371, "ex": 5011, "ac": 5010, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4942", "d": "2026-09-18", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 197, "so": 394, "op": 6217, "ex": 5823, "ac": 5823, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5014", "d": "2026-09-18", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 261, "so": 522, "op": 4065, "ex": 3543, "ac": 3542, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4918", "d": "2026-09-18", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 227, "so": 454, "op": 6997, "ex": 6543, "ac": 6541, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4990", "d": "2026-09-18", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 241, "so": 482, "op": 6594, "ex": 6112, "ac": 6091, "v": 21, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5039", "d": "2026-09-19", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 165, "so": 330, "op": 4520, "ex": 4190, "ac": 4188, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4967", "d": "2026-09-19", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 174, "so": 348, "op": 5010, "ex": 4662, "ac": 4660, "v": 2, "cm": "", "fs": "DELAYED", "ms": 0},
+    {"id": "IPLF4943", "d": "2026-09-19", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 213, "so": 426, "op": 5823, "ex": 5397, "ac": 5367, "v": 30, "cm": "Freezer door left ajar overnight, 30 buns went soggy and were discarded", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5015", "d": "2026-09-19", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 277, "so": 554, "op": 3542, "ex": 2988, "ac": 2987, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4919", "d": "2026-09-19", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 225, "so": 450, "op": 6541, "ex": 6091, "ac": 6091, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4991", "d": "2026-09-19", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 233, "so": 466, "op": 6091, "ex": 5625, "ac": 5599, "v": 26, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "", "d": "2026-09-20", "st": "WOW Momos - Electronic City", "ar": "", "ct": "", "by": "", "bg": 145, "so": 290, "op": None, "ex": None, "ac": None, "v": None, "cm": "", "fs": "MISSED", "ms": 1},
+    {"id": "IPLF4968", "d": "2026-09-20", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 192, "so": 384, "op": 4660, "ex": 4276, "ac": 4276, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4944", "d": "2026-09-20", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 216, "so": 432, "op": 5367, "ex": 4935, "ac": 4932, "v": 3, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5016", "d": "2026-09-20", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 278, "so": 556, "op": 2987, "ex": 2431, "ac": 2431, "v": 0, "cm": "", "fs": "DELAYED", "ms": 0},
+    {"id": "IPLF4920", "d": "2026-09-20", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 214, "so": 428, "op": 6091, "ex": 5663, "ac": 5655, "v": 8, "cm": "Opened pack not used within shift, 8 buns went stale", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4992", "d": "2026-09-20", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 239, "so": 478, "op": 5599, "ex": 5121, "ac": 5091, "v": 30, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5041", "d": "2026-09-21", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 126, "so": 252, "op": 3898, "ex": 3646, "ac": 3637, "v": 9, "cm": "Yesterday's entry missed, counted today", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4969", "d": "2026-09-21", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 152, "so": 304, "op": 4276, "ex": 3972, "ac": 3971, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4945", "d": "2026-09-21", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 172, "so": 344, "op": 4932, "ex": 4588, "ac": 4586, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5017", "d": "2026-09-21", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 219, "so": 438, "op": 2431, "ex": 1993, "ac": 1991, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4921", "d": "2026-09-21", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 191, "so": 382, "op": 5655, "ex": 5273, "ac": 5273, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4993", "d": "2026-09-21", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 202, "so": 404, "op": 5091, "ex": 4687, "ac": 4653, "v": 34, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5042", "d": "2026-09-22", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 121, "so": 242, "op": 3637, "ex": 3395, "ac": 3393, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4970", "d": "2026-09-22", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 158, "so": 316, "op": 3971, "ex": 3655, "ac": 3649, "v": 6, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4946", "d": "2026-09-22", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 174, "so": 348, "op": 4586, "ex": 4238, "ac": 4237, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5018", "d": "2026-09-22", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 229, "so": 458, "op": 1991, "ex": 1533, "ac": 1532, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4922", "d": "2026-09-22", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 195, "so": 390, "op": 5273, "ex": 4883, "ac": 4883, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4994", "d": "2026-09-22", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 204, "so": 408, "op": 4653, "ex": 4245, "ac": 4207, "v": 38, "cm": "Manager note: staff meals being issued without a POS entry, will start logging", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5043", "d": "2026-09-23", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 130, "so": 260, "op": 3393, "ex": 3133, "ac": 3130, "v": 3, "cm": "", "fs": "DELAYED", "ms": 0},
+    {"id": "IPLF4971", "d": "2026-09-23", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 156, "so": 312, "op": 3649, "ex": 3337, "ac": 3337, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4947", "d": "2026-09-23", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 159, "so": 318, "op": 4237, "ex": 3919, "ac": 3919, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5019", "d": "2026-09-23", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 217, "so": 434, "op": 1532, "ex": 1098, "ac": 1098, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4923", "d": "2026-09-23", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 182, "so": 364, "op": 4883, "ex": 4519, "ac": 4517, "v": 2, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4995", "d": "2026-09-23", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 206, "so": 412, "op": 4207, "ex": 3795, "ac": 3783, "v": 12, "cm": "Staff meal logging started - 12 buns for staff meals", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5044", "d": "2026-09-24", "st": "WOW Momos - Electronic City", "ar": "Electronic City", "ct": "bangalore", "by": "Arjun Das", "bg": 137, "so": 274, "op": 3130, "ex": 2856, "ac": 2855, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4972", "d": "2026-09-24", "st": "WOW Momos - HSR Layout", "ar": "HSR Layout", "ct": "bangalore", "by": "Imran Sheikh", "bg": 150, "so": 300, "op": 3337, "ex": 3037, "ac": 3037, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4948", "d": "2026-09-24", "st": "WOW Momos - Indiranagar", "ar": "Indiranagar", "ct": "bangalore", "by": "Sneha Reddy", "bg": 176, "so": 352, "op": 3919, "ex": 3567, "ac": 3567, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF5020", "d": "2026-09-24", "st": "WOW Momos - Jayanagar", "ar": "Jayanagar", "ct": "bangalore", "by": "Lakshmi Iyer", "bg": 214, "so": 428, "op": 1098, "ex": 670, "ac": 669, "v": 1, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4924", "d": "2026-09-24", "st": "WOW Momos - Koramangala", "ar": "Koramangala", "ct": "bangalore", "by": "Ravi Kumar", "bg": 185, "so": 370, "op": 4517, "ex": 4147, "ac": 4147, "v": 0, "cm": "", "fs": "ON TIME", "ms": 0},
+    {"id": "IPLF4996", "d": "2026-09-24", "st": "WOW Momos - Whitefield", "ar": "Whitefield", "ct": "bangalore", "by": "Pradeep Nair", "bg": 213, "so": 426, "op": 3783, "ex": 3357, "ac": 3349, "v": 8, "cm": "Staff meals logged, 8 buns", "fs": "ON TIME", "ms": 0}
+]
+
+# -- HTML + JS ---------------------------------------------------------------------
+def build_css():
+    return r"""
+:root{--bg:#f8f4ef;--card:#fff;--ink:#241b18;--mut:#7a6d66;--line:#eadfd6;--brand:#8b1a2b;--brand2:#f2a900;
+--red:#c62828;--redbg:#fdeaea;--amb:#b26a00;--ambbg:#fff3dc;--grn:#2e7d32;--grnbg:#e6f4e7;--blu:#1f5fa8;--blubg:#e6effa;--gry:#6b6b6b;--grybg:#eee}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Arial,"Segoe UI",sans-serif}
+.top{background:var(--brand);color:#fff;border-bottom:4px solid var(--brand2);position:sticky;top:0;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+.wrap{max-width:1320px;margin:0 auto;padding:0 20px}
+.top .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding-top:12px;padding-bottom:12px}
+h1{margin:0;font-size:20px;font-weight:700}.sub{opacity:.85;font-size:12.5px;margin-top:2px}
+.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.filters label{font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.85}
+.filters input,.filters select{border:0;border-radius:6px;padding:7px 9px;font:inherit;color:var(--ink);background:#fff}
+.btn{border:1px solid rgba(255,255,255,.5);background:transparent;color:#fff;border-radius:6px;padding:7px 12px;cursor:pointer;font:inherit;font-size:12.5px}
+.btn:hover{background:#fff;color:var(--brand)}
+.tbtn{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:6px;padding:6px 11px;cursor:pointer;font:inherit;font-size:12.5px}
+.tbtn:hover{border-color:var(--brand);color:var(--brand)}
+main{padding:20px 0 40px}
+section{margin-bottom:22px}
+h2{font-size:15px;margin:0 0 4px}.note{color:var(--mut);font-size:12.5px;margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;border-top:3px solid var(--brand2)}
+.kpi .l{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut)}
+.kpi .v{font-size:26px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}.kpi .s{font-size:12px;color:var(--mut);margin-top:2px}
+.kpi.bad{border-top-color:var(--red)}.kpi.bad .v{color:var(--red)}.kpi.good{border-top-color:var(--grn)}
+.attn{display:grid;gap:8px}
+.a{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--gry);border-radius:8px;padding:10px 14px}
+.a.crit{border-left-color:var(--red)}.a.warn{border-left-color:var(--brand2)}.a.info{border-left-color:var(--blu)}
+.a b{display:block}.a span{color:var(--mut);font-size:13px}
+table{width:100%;border-collapse:collapse}
+.tw{overflow:auto;max-height:540px}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);text-align:left;padding:8px 10px;border-bottom:2px solid var(--line);white-space:nowrap;background:#fdfaf7;position:sticky;top:0;z-index:10;box-shadow:0 1px 0 var(--line)}
+th .s{cursor:pointer}th .cf{cursor:pointer;margin-left:5px;color:#b9aca4;font-size:10px}th .cf.on{color:var(--amb)}
+.sort-icon{color:#b9aca4;font-size:10px;margin-left:3px}.sort-icon.active{color:var(--brand)}
+td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+tr:hover td{background:#fdf9f4}
+.sid{font-size:11px;color:#888;font-family:monospace;white-space:nowrap}
+.chip{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.c-ok{background:var(--grnbg);color:var(--grn)}.c-warn{background:var(--ambbg);color:var(--amb)}.c-crit{background:var(--redbg);color:var(--red)}
+.c-sur{background:var(--blubg);color:var(--blu)}.c-miss{background:var(--grybg);color:var(--gry)}
+.pos{color:var(--red);font-weight:700}.neg{color:var(--blu);font-weight:700}.zero{color:var(--mut)}
+.why{max-width:420px}.nor{color:var(--red);font-weight:600}
+.grid2{display:grid;grid-template-columns:3fr 2fr;gap:16px}
+.chartbox{height:320px}
+.tbar{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.tbar input{border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit;min-width:220px}
+.badge{font-size:12px;color:var(--amb);font-weight:600}
+.pager{display:flex;gap:10px;align-items:center;justify-content:flex-end;margin-top:8px;font-size:12.5px;color:var(--mut)}
+.info-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:#e2e8f0;color:#475569;font-size:9px;cursor:help;margin-left:4px;text-transform:none;letter-spacing:0}
+.cfm{position:fixed;z-index:9500;background:#fff;border:1px solid #cbd5e1;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.15);padding:6px;max-height:260px;overflow-y:auto;min-width:180px;font-size:13px}
+.cfm label{display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer}
+@media(max-width:1000px){.kpis{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}}
+"""
+
+def build_body():
+    return r"""
+<div class="top"><div class="wrap">
+  <div><h1>__BRAND__ - __PROCESS__</h1><div class="sub" id="sub"></div></div>
+  <div class="filters">
+    <label>Store</label><select id="fStore"></select>
+    <label>From</label><input type="date" id="fFrom">
+    <label>To</label><input type="date" id="fTo">
+    <button class="btn" id="btnReset">Reset</button>
+  </div>
+</div></div>
+<main><div class="wrap">
+<section><div class="kpis" id="kpis"></div></section>
+<section><h2>Needs head-office attention</h2><p class="note">Generated from the submissions in the selected date range.</p><div class="attn" id="attn"></div></section>
+<section><div class="card"><h2 id="briefTitle">Variance report</h2><p class="note" id="briefNote"></p><div id="tBrief"></div></div></section>
+<section><div class="card"><h2>Daily variance - selected stores<span class="info-icon" title="Bars above zero = shortage (fewer buns in store than POS implies).&#10;Bars below zero = surplus (more buns than POS implies).&#10;Line = shortage as % of buns sold.&#10;Computed by this dashboard.">&#9432;</span></h2>
+  <p class="note">Shortage vs surplus per day, with shortage as a percentage of buns sold.</p><div class="chartbox" id="chTrend"></div></div></section>
+<section><div class="grid2">
+  <div class="card"><h2>Why are buns going missing?<span class="info-icon" title="Shortages of 6+ buns grouped by keywords in the store's own comment.&#10;'No reason given' = store left the comment blank.&#10;Category is assigned by this dashboard, not the form.">&#9432;</span></h2><p class="note">Shortage buns by stated reason.</p><div class="chartbox" id="chReason"></div></div>
+  <div class="card"><h2>Store scorecard</h2><p class="note">Ranked by shortage % of buns sold.</p><div id="tScore"></div></div>
+</div></section>
+<section><div class="card"><h2>Stock runway to month-end<span class="info-icon" title="Days left = latest physical count / average buns sold per day over the last 7 days.&#10;Compared with the days remaining in the month.&#10;Computed by this dashboard.">&#9432;</span></h2>
+  <p class="note">Closing stock over time, and whether each store has enough buns to last the month.</p>
+  <div class="grid2"><div class="chartbox" id="chStock"></div><div id="tRunway"></div></div></div></section>
+<section><div class="card"><h2>Exception log<span class="info-icon" title="Days where the count was 6 or more buns off, or the store did not submit.&#10;6 buns is the dashboard's tolerance, not a Taqtics setting.">&#9432;</span></h2>
+  <p class="note">Every day the count was 6+ buns off, or the entry was missed, with the store's own explanation.</p><div id="tExc"></div></div></section>
+<section><div class="card"><h2>All submissions</h2><p class="note">Full detail for the selected range and store.</p><div id="tAll"></div></div></section>
+</div></main>
+"""
+
+def build_js():
+    return r"""
+const TOL = 6, CRIT_PCT = 6, PAGE = 50;
+const PALETTE = ['#8b1a2b','#f2a900','#1f5fa8','#2e7d32','#7b4bb3','#00897b','#e4572e','#546e7a'];
+const PL = {responsive:true, displayModeBar:'hover', displaylogo:false, toImageButtonOptions:{format:'png', scale:2}};
+const $ = id => document.getElementById(id);
+const fmt = n => (n===null||n===undefined||isNaN(n)) ? '-' : Math.round(n).toLocaleString('en-IN');
+const sgn = n => (n>0?'+':'')+fmt(n);
+const iso = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+const parseIso = s => { const p=s.split('-'); return new Date(+p[0], +p[1]-1, +p[2]); };
+const addDays = (s,n) => { const d=parseIso(s); d.setDate(d.getDate()+n); return iso(d); };
+const nice = s => parseIso(s).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+const short = s => parseIso(s).toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
+const esc = s => String(s===null||s===undefined?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const shortStore = s => s.replace(/^WOW Momos\s*-\s*/i,'');
+const sum = (a,k) => a.reduce((x,r)=>x+(r[k]||0),0);
+
+const DATA = TABLE_DATA.map(r => ({id:r.id,date:r.d,store:r.st,area:r.ar,city:r.ct,by:r.by,burgers:r.bg,sold:r.so,open:r.op,exp:r.ex,
+  act:r.ac,v:r.v,comment:r.cm,status:r.fs,missed:r.ms===1}));
+const STORES = META.store_list;
+const MAXD = META.max_date;
+
+const REASONS = [
+ [/training|new staff|trainee/i,'Training wastage'],
+ [/over ?cook|burn|toast/i,'Overcooked / burnt'],
+ [/drop|damag|tray/i,'Dropped / damaged'],
+ [/freezer|stale|spoil|expire|soggy|fung/i,'Spoilage / storage'],
+ [/staff meal/i,'Staff meals not billed'],
+ [/transfer|received/i,'Unlogged inter-store transfer'],
+ [/recount|count|missed|entry/i,'Counting / entry error']];
+function reason(r){
+  if(r.missed) return 'Entry missed';
+  if(!r.comment) return 'No reason given';
+  for(const x of REASONS) if(x[0].test(r.comment)) return x[1];
+  return 'Other';
+}
+function sev(r){
+  if(r.missed) return 'miss';
+  if(Math.abs(r.v)<TOL) return 'ok';
+  if(r.v<0) return 'sur';
+  return (r.sold && r.v/r.sold*100>=CRIT_PCT) ? 'crit' : 'warn';
+}
+const CHIP = {ok:['c-ok','Within tolerance'],warn:['c-warn','Shortage'],crit:['c-crit','High shortage'],sur:['c-sur','Surplus'],miss:['c-miss','Not submitted']};
+const chip = s => '<span class="chip '+CHIP[s][0]+'">'+CHIP[s][1]+'</span>';
+const vcell = v => (v===null||isNaN(v)) ? '<span class="zero">-</span>' : '<span class="'+(v>0?'pos':v<0?'neg':'zero')+'">'+(v===0?'0':sgn(v))+'</span>';
+
+/* ---------------- generic table: sort, search, column filter, pagination, CSV ---------------- */
+const TABLES = {};
+function Tbl(id, cols, opt){
+  const T = {id:id, cols:cols, opt:opt||{}, rows:[], sort:{col:null,dir:-1}, search:'', page:1, cf:{}};
+  TABLES[id] = T; return T;
+}
+function tval(c,r){ const v = c.t(r); return (v===null||v===undefined)?'':v; }
+function tRows(T){
+  let rows = T.rows.filter(r => Object.keys(T.cf).every(k => { const s=T.cf[k]; return !s || s.size===0 || s.has(String(tval(T.cols[+k],r))); }));
+  if(T.search){ const q=T.search.toLowerCase(); rows = rows.filter(r => T.cols.some(c => String(tval(c,r)).toLowerCase().indexOf(q)>=0)); }
+  if(T.sort.col!==null){ const c=T.cols[T.sort.col], d=T.sort.dir;
+    rows = rows.slice().sort((a,b)=>{ const x=tval(c,a), y=tval(c,b);
+      if(x==='') return 1; if(y==='') return -1;
+      return typeof x==='string' ? d*x.localeCompare(y) : d*(x-y); }); }
+  return rows;
+}
+function tDraw(T){
+  const el = $(T.id), rows = tRows(T), o = T.opt;
+  const pages = o.pager ? Math.max(1, Math.ceil(rows.length/PAGE)) : 1;
+  if(T.page>pages) T.page = pages;
+  const view = o.pager ? rows.slice((T.page-1)*PAGE, T.page*PAGE) : rows;
+  const nf = Object.keys(T.cf).filter(k => T.cf[k] && T.cf[k].size).length;
+  let h = '';
+  if(o.search || o.csv){
+    h += '<div class="tbar">' + (o.search?'<input type="text" placeholder="Search this table" value="'+esc(T.search)+'" data-act="search">':'')
+      + (o.csv?'<button class="tbtn" data-act="csv">Download CSV</button>':'')
+      + (nf?'<span class="badge">'+nf+' column filter'+(nf>1?'s':'')+' active</span>':'') + '</div>';
+  }
+  h += '<div class="tw"'+(o.maxh?' style="max-height:'+o.maxh+'px"':'')+'><table><thead><tr>';
+  T.cols.forEach((c,i)=>{
+    const arrow = T.sort.col!==i ? '<span class="sort-icon">&#8645;</span>' : '<span class="sort-icon active">'+(T.sort.dir===1?'&#9650;':'&#9660;')+'</span>';
+    const on = T.cf[i] && T.cf[i].size;
+    h += '<th class="'+(c.n?'n':'')+'"><span class="s" data-act="sort" data-i="'+i+'">'+esc(c.l)+arrow+'</span>'
+      + (o.colfilter?'<span class="cf'+(on?' on':'')+'" data-act="cf" data-i="'+i+'">&#9660;</span>':'')+'</th>';
+  });
+  h += '</tr></thead><tbody>';
+  h += view.length ? view.map(r => '<tr>'+T.cols.map(c=>'<td class="'+(c.n?'n':'')+(c.cls?' '+c.cls:'')+'">'+(c.h?c.h(r):esc(tval(c,r)))+'</td>').join('')+'</tr>').join('')
+    : '<tr><td colspan="'+T.cols.length+'" style="text-align:center;color:#7a6d66;padding:24px">No rows for the selected filters.</td></tr>';
+  h += '</tbody></table></div>';
+  if(o.pager) h += '<div class="pager"><span>'+rows.length+' rows</span><button class="tbtn" data-act="prev">Prev</button><span>Page '+T.page+' of '+pages+'</span><button class="tbtn" data-act="next">Next</button></div>';
+  const keep = document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute('data-act')==='search';
+  el.innerHTML = h;
+  if(keep){ const inp = el.querySelector('input[data-act=search]'); if(inp){ inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); } }
+}
+function tSet(T, rows){ T.rows = rows; T.page = 1; tDraw(T); }
+function closeCF(){ document.querySelectorAll('.cfm').forEach(m=>m.remove()); }
+function openCF(T, i, anchor){
+  closeCF();
+  const col = T.cols[i];
+  const vals = Array.from(new Set(T.rows.map(r=>String(tval(col,r))))).sort();
+  const act = T.cf[i] || new Set();
+  const rc = anchor.getBoundingClientRect();
+  const m = document.createElement('div'); m.className='cfm'; m.style.top=(rc.bottom+2)+'px'; m.style.left=Math.max(4,Math.min(rc.left, window.innerWidth-220))+'px';
+  m.innerHTML = '<label style="font-weight:600;border-bottom:1px solid #e2e8f0"><input type="checkbox" id="cfa" '+(act.size===0?'checked':'')+'> All</label>'
+    + vals.map(v=>'<label><input type="checkbox" class="cfv" data-v="'+esc(v)+'" '+(act.size===0||act.has(v)?'checked':'')+'> '+(esc(v)||'(blank)')+'</label>').join('');
+  document.body.appendChild(m);
+  m.addEventListener('click', e => e.stopPropagation());
+  m.addEventListener('change', e => {
+    const all = m.querySelector('#cfa'), vs = Array.from(m.querySelectorAll('.cfv'));
+    if(e.target===all) vs.forEach(c=>c.checked=all.checked); else all.checked = vs.every(c=>c.checked);
+    const sel = vs.filter(c=>c.checked).map(c=>c.getAttribute('data-v'));
+    T.cf[i] = sel.length===vals.length ? new Set() : new Set(sel);
+    T.page = 1; tDraw(T);
+  });
+}
+function csvOut(T){
+  const rows = tRows(T);
+  const q = v => '"'+String(v===null||v===undefined?'':v).replace(/"/g,'""')+'"';
+  const txt = '﻿'+[T.cols.map(c=>q(c.l)).join(',')].concat(rows.map(r=>T.cols.map(c=>q(tval(c,r))).join(','))).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));
+  a.download = T.id+'_'+iso(new Date())+'.csv'; document.body.appendChild(a); a.click(); a.remove();
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-act]');
+  if(!e.target.closest('.cfm')) closeCF();
+  if(!t) return;
+  const host = t.closest('[id^=t]'); if(!host || !TABLES[host.id]) return;
+  const T = TABLES[host.id], a = t.getAttribute('data-act'), i = +t.getAttribute('data-i');
+  if(a==='sort'){ T.sort.dir = (T.sort.col===i) ? -T.sort.dir : -1; T.sort.col = i; T.page=1; tDraw(T); }
+  else if(a==='cf'){ e.stopPropagation(); openCF(T,i,t); }
+  else if(a==='csv') csvOut(T);
+  else if(a==='prev'){ T.page=Math.max(1,T.page-1); tDraw(T); }
+  else if(a==='next'){ T.page++; tDraw(T); }
+});
+document.addEventListener('input', e => {
+  const t = e.target; if(t.getAttribute && t.getAttribute('data-act')==='search'){
+    const host = t.closest('[id^=t]'); const T = TABLES[host.id]; T.search = t.value.trim(); T.page = 1; tDraw(T); }
+});
+
+/* ---------------- table definitions ---------------- */
+const stCol = {l:'Store', t:r=>shortStore(r.store), h:r=>'<b>'+esc(shortStore(r.store))+'</b>'};
+const sidCol = {l:'Submission ID', t:r=>r.id, h:r=>'<span class="sid">'+(esc(r.id)||'-')+'</span>'};
+const statusCol = {l:'Status', t:r=>CHIP[sev(r)][1], h:r=>chip(sev(r))+(r.status==='DELAYED'?' <span class="chip c-warn">Late</span>':'')};
+const varCol = {l:'Variance', n:1, t:r=>r.missed?null:r.v, h:r=>vcell(r.missed?null:r.v)};
+const whyCol = {l:"Store's comment", cls:'why', t:r=>r.missed?'Store did not submit the count':(r.comment||(Math.abs(r.v)>=TOL?'No reason given':'')),
+  h:r=>r.missed?'<span class="nor">Store did not submit the count</span>':(r.comment?esc(r.comment):(Math.abs(r.v)>=TOL?'<span class="nor">No reason given</span>':'<span class="zero">Within tolerance</span>'))};
+const num = (l,k) => ({l:l, n:1, t:r=>r.missed?null:r[k], h:r=>r.missed?'-':fmt(r[k])});
+const tBrief = Tbl('tBrief',[stCol,{l:'Submitted by',t:r=>r.by},num('Burgers (POS)','burgers'),num('Buns sold','sold'),num('Opening','open'),num('Expected closing','exp'),num('Actual closing','act'),varCol,statusCol,whyCol]);
+const tScore = Tbl('tScore',[{l:'Store',t:r=>shortStore(r.s),h:r=>'<b>'+esc(shortStore(r.s))+'</b>'},
+  {l:'Short',n:1,t:r=>r.sh,h:r=>fmt(r.sh)},
+  {l:'Short %',n:1,t:r=>+r.pct.toFixed(2),h:r=>'<span class="chip '+(r.pct>=4?'c-crit':r.pct>=2?'c-warn':'c-ok')+'">'+r.pct.toFixed(1)+'%</span>'},
+  {l:'Unexplained',n:1,t:r=>r.un,h:r=>r.un?'<span class="nor">'+r.un+'</span>':'0'},
+  {l:'Missed',n:1,t:r=>r.ms},
+  {l:'On-time %',n:1,t:r=>Math.round(r.ok),h:r=>Math.round(r.ok)+'%'},
+  {l:'Trend',t:r=>null,h:r=>spark(r.spark)}]);
+const tRunway = Tbl('tRunway',[{l:'Store',t:r=>shortStore(r.store),h:r=>'<b>'+esc(shortStore(r.store))+'</b>'},
+  {l:'Stock',n:1,t:r=>Math.max(r.stock,0),h:r=>fmt(Math.max(r.stock,0))},{l:'Burn/day',n:1,t:r=>Math.round(r.burn),h:r=>fmt(r.burn)},
+  {l:'Days left',n:1,t:r=>+r.days.toFixed(1)},
+  {l:'Month-end',t:r=>r.short>0?'Short '+r.short:'Covered',h:r=>r.short>0?'<span class="chip c-crit">Short ~'+fmt(r.short)+'</span>':'<span class="chip c-ok">Covered</span>'}]);
+const excCols = [{l:'Date',t:r=>r.date,h:r=>short(r.date)},stCol,num('Buns sold','sold'),num('Expected','exp'),num('Actual','act'),varCol,statusCol,
+  {l:'Reason category',t:r=>reason(r),h:r=>reason(r)==='No reason given'?'<span class="nor">No reason given</span>':esc(reason(r))},whyCol];
+const tExc = Tbl('tExc',excCols,{search:1,csv:1,colfilter:1,pager:1,maxh:460});
+const tAll = Tbl('tAll',[sidCol,{l:'Date',t:r=>r.date,h:r=>nice(r.date)},stCol,{l:'Area',t:r=>r.area},{l:'City',t:r=>r.city},{l:'Submitted by',t:r=>r.by},
+  num('Burgers (POS)','burgers'),num('Buns sold','sold'),num('Opening','open'),num('Expected closing','exp'),num('Actual closing','act'),varCol,
+  {l:'Filing status',t:r=>r.status},{l:'Reason category',t:r=>Math.abs(r.v||0)>=TOL||r.missed?reason(r):''},{l:"Store's comment",cls:'why',t:r=>r.comment}],
+  {search:1,csv:1,colfilter:1,pager:1});
+tExc.sort = {col:0, dir:-1};
+tAll.sort = {col:1, dir:-1};
+
+/* ---------------- filters ---------------- */
+$('fStore').innerHTML = '<option value="all">All stores</option>' + STORES.map(s=>'<option value="'+esc(s)+'">'+esc(shortStore(s))+'</option>').join('');
+function initDateRange(){
+  $('fFrom').value = META.min_date; $('fTo').value = META.max_date;
+}
+initDateRange();
+['fStore','fFrom','fTo'].forEach(i => $(i).addEventListener('change', render));
+$('btnReset').addEventListener('click', () => {
+  $('fStore').value = 'all'; initDateRange();
+  Object.keys(TABLES).forEach(k => { const T=TABLES[k]; T.cf={}; T.search=''; T.page=1; });
+  render();
+});
+$('sub').textContent = 'Store-entered closing bun counts vs POS-expected usage  |  Generated ' + META.generated_at;
+
+/* ---------------- render ---------------- */
+function runway(store, to, daysLeft){
+  const l = DATA.filter(r=>r.store===store && r.date<=to);
+  const f = l.filter(r=>!r.missed); if(!f.length) return null;
+  const last = f[f.length-1];
+  const sales = l.filter(r=>r.sold!==null).slice(-7);
+  const burn = sales.length ? sum(sales,'sold')/sales.length : 0;
+  if(!burn) return null;
+  const days = last.act/burn;
+  return {store:store, stock:last.act, burn:burn, days:days, short:Math.max(0, Math.round(burn*daysLeft-last.act))};
+}
+function spark(v){
+  const w=6,h=26,m=Math.max(20,...v.map(Math.abs));
+  return '<svg width="'+(v.length*w)+'" height="'+h+'" style="display:block">'+v.map((x,i)=>{
+    const bh=Math.min(h/2,Math.abs(x)/m*(h/2));
+    return '<rect x="'+(i*w)+'" y="'+(x>=0?h/2-bh:h/2)+'" width="'+(w-1.5)+'" height="'+Math.max(bh,x?1:0)+'" fill="'+(x>=TOL?'#c62828':x<=-TOL?'#1f5fa8':'#cbbfb6')+'"/>';}).join('')
+    +'<line x1="0" x2="'+(v.length*w)+'" y1="'+(h/2)+'" y2="'+(h/2)+'" stroke="#eadfd6"/></svg>';
+}
+function render(){
+  let from = $('fFrom').value || '0000-01-01', to = $('fTo').value || '9999-12-31';
+  if(from>to){ const t=from; from=to; to=t; }
+  const sel = $('fStore').value;
+  const rows = DATA.filter(r => (sel==='all'||r.store===sel) && r.date>=from && r.date<=to);
+  const filed = rows.filter(r=>!r.missed);
+  const stores = STORES.filter(s => sel==='all'||s===sel);
+  const dates = []; if(from<=to && from>='2000-01-01'){ for(let d=from; d<=to && dates.length<400; d=addDays(d,1)) dates.push(d); }
+
+  /* KPIs */
+  const sold = sum(filed,'sold'), shortB = filed.reduce((a,r)=>a+Math.max(r.v,0),0), sur = filed.reduce((a,r)=>a+Math.max(-r.v,0),0);
+  const shortRows = filed.filter(r=>r.v>=TOL), unexpl = shortRows.filter(r=>!r.comment).length;
+  const missed = rows.filter(r=>r.missed).length, late = rows.filter(r=>r.status==='DELAYED').length, ontime = rows.filter(r=>r.status==='ON TIME').length;
+  const pct = sold ? shortB/sold*100 : 0;
+  $('kpis').innerHTML = [
+    ['Buns sold (POS)', fmt(sold), fmt(sum(filed,'burgers'))+' burgers', ''],
+    ['Shortage', fmt(shortB), pct.toFixed(1)+'% of buns sold', pct>2?'bad':'good'],
+    ['Surplus', fmt(sur), 'more stock than POS implies', ''],
+    ['Net variance', sgn(shortB-sur), 'shortage minus surplus', ''],
+    ['Unexplained shortages', unexpl, 'of '+shortRows.length+' shortages of 6+ buns', unexpl?'bad':'good'],
+    ['Filing compliance', rows.length?Math.round(ontime/rows.length*100)+'%':'-', missed+' missed  |  '+late+' delayed', missed?'bad':'good']
+  ].map(x=>'<div class="kpi '+x[3]+'"><div class="l">'+x[0]+'</div><div class="v">'+x[1]+'</div><div class="s">'+x[2]+'</div></div>').join('');
+
+  /* attention */
+  const A = [];
+  const dte = parseIso(to<'9999'?to:MAXD);
+  const daysLeft = new Date(dte.getFullYear(), dte.getMonth()+1, 0).getDate() - dte.getDate();
+  const run = stores.map(s=>runway(s, to, daysLeft)).filter(Boolean);
+  run.filter(x=>x.short>0).sort((a,b)=>a.days-b.days).forEach(x => A.push(['crit', shortStore(x.store)+' will run out of buns in about '+Math.max(0,x.days).toFixed(1)+' day(s)',
+    'Only '+fmt(Math.max(x.stock,0))+' buns left at '+fmt(x.burn)+'/day. About '+fmt(x.short)+' more are needed to last the '+daysLeft+' remaining days of the month. Request a top-up.']));
+  stores.forEach(s => {
+    const l = DATA.filter(r=>r.store===s && r.date<=to && !r.missed);
+    const w = l.slice(-7).reduce((a,r)=>a+Math.max(r.v,0),0), p = l.slice(-14,-7).reduce((a,r)=>a+Math.max(r.v,0),0);
+    const wu = l.slice(-7).filter(r=>r.v>=TOL && !r.comment).length;
+    if(w>60 && w>2*p) A.push(['crit', shortStore(s)+': shortage is climbing', fmt(w)+' buns short in the last 7 filed days vs '+fmt(p)+' the week before'+(wu?' ('+wu+' of those days had no reason entered)':'')+'. Pattern suggests unrecorded usage such as staff meals, or leakage. Audit before it grows.']);
+    const sr = rows.filter(r=>r.store===s && !r.missed && r.v<=-TOL);
+    if(sr.length>=2) A.push(['info', shortStore(s)+': '+sr.length+' surplus days', fmt(sr.reduce((a,r)=>a-r.v,0))+' extra buns found in store. Stated reasons point to inter-store transfers that were not logged, so the sending store will look short.']);
+    const ms = rows.filter(r=>r.store===s && r.missed).length;
+    if(ms>=2) A.push(['warn', shortStore(s)+': '+ms+' missed entries', 'The variance on the day after a missed entry covers more than one day of usage, so it is harder to explain. Follow up with the store manager.']);
+  });
+  if(unexpl) A.push(['warn', unexpl+' shortage day(s) submitted without a reason', 'See the exception log below, rows marked "No reason given".']);
+  $('attn').innerHTML = A.length ? A.map(x=>'<div class="a '+x[0]+'"><b>'+esc(x[1])+'</b><span>'+esc(x[2])+'</span></div>').join('') : '<div class="a info"><b>All clear</b><span>No stores need attention in this range.</span></div>';
+
+  /* next-morning brief: latest day in range that has data */
+  const withData = rows.map(r=>r.date).sort();
+  const day = withData.length ? withData[withData.length-1] : to;
+  $('briefTitle').textContent = 'Variance report for ' + (withData.length ? nice(day) : 'the selected range');
+  $('briefNote').textContent = 'Latest day in the selected range - what head office sees the next morning.';
+  tSet(tBrief, rows.filter(r=>r.date===day).sort((a,b)=>a.store<b.store?-1:1));
+
+  /* charts */
+  const bySh = dates.map(d=>filed.filter(r=>r.date===d).reduce((a,r)=>a+Math.max(r.v,0),0));
+  const bySu = dates.map(d=>-filed.filter(r=>r.date===d).reduce((a,r)=>a+Math.max(-r.v,0),0));
+  const bySo = dates.map(d=>filed.filter(r=>r.date===d).reduce((a,r)=>a+(r.sold||0),0));
+  const xl = dates.map(short);
+  Plotly.react('chTrend', [
+    {type:'bar', name:'Shortage (buns)', x:xl, y:bySh, marker:{color:'#c62828'}},
+    {type:'bar', name:'Surplus (buns)', x:xl, y:bySu, marker:{color:'#1f5fa8'}},
+    {type:'scatter', mode:'lines+markers', name:'Shortage % of sold', x:xl, y:bySh.map((v,i)=>bySo[i]?+(v/bySo[i]*100).toFixed(2):null), yaxis:'y2', line:{color:'#f2a900',width:2}, connectgaps:true}
+  ], {barmode:'relative', margin:{t:10,r:50,b:50,l:50}, legend:{orientation:'h', y:-0.2}, hovermode:'x unified', paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
+      yaxis:{title:'Buns', gridcolor:'#f0e8e0', zeroline:true}, yaxis2:{overlaying:'y', side:'right', title:'% of sold', ticksuffix:'%', showgrid:false}, xaxis:{type:'category'}}, PL);
+
+  const rc = {}; shortRows.forEach(r=>{ const k=reason(r); rc[k]=(rc[k]||0)+r.v; });
+  const rk = Object.keys(rc).map(k=>[k,rc[k]]).sort((a,b)=>a[1]-b[1]);
+  Plotly.react('chReason', [{type:'bar', orientation:'h', x:rk.map(x=>x[1]), y:rk.map(x=>x[0]), marker:{color:rk.map(x=>x[0]==='No reason given'?'#c62828':'#d9a441')}, hovertemplate:'%{y}: %{x} buns<extra></extra>'}],
+    {margin:{t:10,r:20,b:40,l:170}, paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)', xaxis:{title:'Buns short', gridcolor:'#f0e8e0'}}, PL);
+
+  const stockTraces = stores.map(s => {
+    const pts = dates.map(d => DATA.find(r=>r.store===s && r.date===d));
+    return {type:'scatter', mode:'lines', name:shortStore(s), x:xl, y:pts.map(r=>r && !r.missed ? r.act : null), connectgaps:true, line:{color:PALETTE[STORES.indexOf(s)%PALETTE.length], width:2}};
+  });
+  Plotly.react('chStock', stockTraces, {margin:{t:10,r:20,b:60,l:60}, legend:{orientation:'h', y:-0.25}, hovermode:'x unified', paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
+      yaxis:{title:'Closing buns in store', gridcolor:'#f0e8e0'}, xaxis:{type:'category'}}, PL);
+
+  /* scorecard + runway */
+  tSet(tScore, stores.map(s => {
+    const l = filed.filter(r=>r.store===s), a = rows.filter(r=>r.store===s), so = sum(l,'sold'), sh = l.reduce((x,r)=>x+Math.max(r.v,0),0);
+    return {s:s, sh:sh, pct:so?sh/so*100:0, un:l.filter(r=>r.v>=TOL && !r.comment).length, ms:a.filter(r=>r.missed).length,
+      ok:a.length?a.filter(r=>r.status==='ON TIME').length/a.length*100:0, spark:dates.map(d=>{ const r=l.find(x=>x.date===d); return r?r.v:0; })};
+  }).sort((a,b)=>b.pct-a.pct));
+  tSet(tRunway, run.sort((a,b)=>a.days-b.days));
+
+  /* exception log + all submissions */
+  tSet(tExc, rows.filter(r=>r.missed || Math.abs(r.v)>=TOL));
+  tSet(tAll, rows);
+}
+render();
+"""
+
+def build_html(table_json, meta_json):
+    css = build_css()
+    body = build_body().replace("__BRAND__", BRAND_NAME).replace("__PROCESS__", PROCESS_NAME)
+    js = build_js()
+    page = (
+        '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+        '<title>__BRAND__ - __PROCESS__</title>\n'
+        '<script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>\n'
+        '<style>__CSS__</style>\n</head>\n<body>\n__BODY__\n'
+        '<script>\nconst TABLE_DATA = __TABLE__;\nconst META = __META__;\n</script>\n'
+        '<script>__JS__</script>\n</body>\n</html>'
+    )
+    return (page.replace("__CSS__", css).replace("__BODY__", body).replace("__JS__", js)
+            .replace("__BRAND__", BRAND_NAME).replace("__PROCESS__", PROCESS_NAME)
+            .replace("__TABLE__", table_json).replace("__META__", meta_json))
+
+# -- Entry point (no __name__ guard, no sys.exit) ------------------------------------
+def fetch_and_process():
+    try:
+        rows = SAMPLE_ROWS
+        days = [r["d"] for r in rows]
+        meta = {
+            "generated_at": (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%d %b %Y %H:%M IST"),
+            "store_list": sorted({r["st"] for r in rows}),
+            "min_date": min(days),
+            "max_date": max(r["d"] for r in rows if not r["ms"]),
+        }
+        table_json = json.dumps(rows, ensure_ascii=False).replace("</", "<\\/")
+        meta_json = json.dumps(meta, ensure_ascii=False).replace("</", "<\\/")
+        html_output = build_html(table_json, meta_json)
+        with open(DEFAULT_OUTPUT_FILE, "w", encoding="utf-8") as f:
+            f.write(html_output)
+        print(f"Report generated: {DEFAULT_OUTPUT_FILE} ({len(rows)} rows)")
+        return html_output
+    except Exception as exc:
+        print(f"Error: {exc}")
+        error_html = (
+            "<html><body style=\"font-family:Arial,sans-serif;padding:40px;text-align:center;color:#475569\">"
+            "<h1 style=\"color:#dc2626\">Unable to generate this report</h1>"
+            "<p>Something went wrong while running this dashboard. Please try again shortly, "
+            "or contact support if the issue persists.</p>"
+            "</body></html>"
+        )
+        with open(DEFAULT_OUTPUT_FILE, "w", encoding="utf-8") as f:
+            f.write(error_html)
+        return error_html
+
+fetch_and_process()

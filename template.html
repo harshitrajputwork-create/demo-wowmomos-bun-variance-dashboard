@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wow Momos – Bun Variance Report</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f8f4ef;--card:#fff;--ink:#241b18;--mut:#7a6d66;--line:#eadfd6;--brand:#8b1a2b;--brand2:#f2a900;
+--red:#c62828;--redbg:#fdeaea;--amb:#b26a00;--ambbg:#fff3dc;--grn:#2e7d32;--grnbg:#e6f4e7;--blu:#1f5fa8;--blubg:#e6effa;--gry:#6b6b6b;--grybg:#eee}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 "Segoe UI",system-ui,-apple-system,sans-serif}
+.top{background:var(--brand);color:#fff;border-bottom:4px solid var(--brand2)}
+.wrap{max-width:1320px;margin:0 auto;padding:0 20px}
+.top .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding-top:14px;padding-bottom:14px}
+h1{margin:0;font-size:20px;font-weight:700}.sub{opacity:.8;font-size:12.5px;margin-top:2px}
+.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.filters label{font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.8}
+.filters input,.filters select{border:0;border-radius:6px;padding:7px 9px;font:inherit;color:var(--ink);background:#fff}
+.pre button{border:1px solid rgba(255,255,255,.4);background:transparent;color:#fff;border-radius:6px;padding:6px 10px;cursor:pointer;font:inherit;font-size:12px}
+.pre button:hover,.pre button.on{background:#fff;color:var(--brand)}
+main{padding:20px 0 40px}
+section{margin-bottom:22px}
+h2{font-size:15px;margin:0 0 4px}.note{color:var(--mut);font-size:12.5px;margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;border-top:3px solid var(--brand2)}
+.kpi .l{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut)}
+.kpi .v{font-size:26px;font-weight:700;margin-top:4px}.kpi .s{font-size:12px;color:var(--mut);margin-top:2px}
+.kpi.bad{border-top-color:var(--red)}.kpi.bad .v{color:var(--red)}.kpi.good{border-top-color:var(--grn)}
+.attn{display:grid;gap:8px}
+.a{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-left:5px solid var(--gry);border-radius:8px;padding:10px 14px}
+.a.crit{border-left-color:var(--red)}.a.warn{border-left-color:var(--brand2)}.a.info{border-left-color:var(--blu)}
+.a b{display:block}.a span{color:var(--mut);font-size:13px}
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);text-align:left;padding:8px 10px;border-bottom:2px solid var(--line);white-space:nowrap;background:#fdfaf7;position:sticky;top:0}
+td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+tr:hover td{background:#fdf9f4}
+.scroll{overflow:auto;max-height:460px}
+.chip{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.c-ok{background:var(--grnbg);color:var(--grn)}.c-warn{background:var(--ambbg);color:var(--amb)}.c-crit{background:var(--redbg);color:var(--red)}
+.c-sur{background:var(--blubg);color:var(--blu)}.c-miss{background:var(--grybg);color:var(--gry)}
+.pos{color:var(--red);font-weight:700}.neg{color:var(--blu);font-weight:700}.zero{color:var(--mut)}
+.why{max-width:420px}.why i{color:var(--mut);font-size:12px}.nor{color:var(--red);font-weight:600}
+.grid2{display:grid;grid-template-columns:3fr 2fr;gap:16px}
+.chartbox{position:relative;height:300px}
+.legend{font-size:12px;color:var(--mut);display:flex;gap:16px;flex-wrap:wrap;margin-top:8px}
+.foot{font-size:12px;color:var(--mut);border-top:1px solid var(--line);padding-top:14px;margin-top:8px}
+@media(max-width:1000px){.kpis{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="top"><div class="wrap">
+  <div><h1>Wow Momos · Bun Variance Report</h1><div class="sub">Store-entered closing counts vs POS-expected usage · pilot</div></div>
+  <div class="filters">
+    <span class="pre" id="pre"></span>
+    <label>Store</label><select id="fStore"></select>
+    <label>From</label><input type="date" id="fFrom">
+    <label>To</label><input type="date" id="fTo">
+  </div>
+</div></div>
+
+<main><div class="wrap">
+
+<section><div class="kpis" id="kpis"></div></section>
+
+<section><h2>Needs head-office attention</h2><p class="note">Auto-generated from the submissions in the selected range.</p><div class="attn" id="attn"></div></section>
+
+<section><div class="card">
+  <h2 id="briefTitle">Yesterday's variance</h2><p class="note" id="briefNote"></p>
+  <div class="scroll" style="max-height:none"><table id="brief"></table></div>
+</div></section>
+
+<section><div class="card">
+  <h2>Daily variance – all selected stores</h2><p class="note">Bars above zero = buns missing vs POS (shortage). Bars below zero = more buns in store than POS says there should be (surplus). Line = shortage as % of buns sold.</p>
+  <div class="chartbox"><canvas id="chTrend"></canvas></div>
+</div></section>
+
+<section><div class="grid2">
+  <div class="card"><h2>Why are buns going missing?</h2><p class="note">Shortage of 6+ buns, grouped by the reason the store gave.</p><div class="chartbox"><canvas id="chReason"></canvas></div></div>
+  <div class="card"><h2>Store scorecard</h2><p class="note">Ranked by shortage % of buns sold.</p><div class="scroll" style="max-height:300px"><table id="score"></table></div></div>
+</div></section>
+
+<section><div class="card">
+  <h2>Stock runway to month-end</h2><p class="note">Latest physical count ÷ average daily buns used (last 7 days) vs days left in the month.</p>
+  <div class="grid2"><div class="chartbox"><canvas id="chStock"></canvas></div><div class="scroll" style="max-height:300px"><table id="runway"></table></div></div>
+</div></section>
+
+<section><div class="card">
+  <h2>Exception log</h2><p class="note">Every day where the count was 6+ buns off, or the entry was missed – with the store's own explanation.</p>
+  <div class="scroll"><table id="exc"></table></div>
+</div>
+<div class="foot">
+  <b>How it works:</b> Store enters POS burgers + physical closing bun count each evening. Buns sold = burgers × 2 · Expected closing = opening stock − buns sold · <b>Variance = Expected − Actual</b>.
+  Positive = shortage (wastage, spoilage, staff meals, theft, unlogged use) · Negative = surplus (unlogged transfer-in, counting error, POS under-billing) ·
+  Tolerance: under 6 buns is treated as normal. Sample data for pilot demonstration.
+</div></section>
+
+</div></main>
+
+<script type="text/plain" id="csv">/*CSV*/</script>
+<script>
+/* ---------- config ---------- */
+const TOL = 6;              // buns; |variance| below this is normal
+const CRIT_PCT = 6;         // shortage % of buns sold that turns red
+const PALETTE = ['#8b1a2b','#f2a900','#1f5fa8','#2e7d32','#7b4bb3','#00897b'];
+const $ = id => document.getElementById(id);
+const fmt = n => Math.round(n).toLocaleString('en-IN');
+const sgn = n => (n>0?'+':'')+fmt(n);
+const MON = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+const iso = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+const nice = s => new Date(s+'T00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+const short = s => new Date(s+'T00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
+const esc = s => String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const shortStore = s => s.replace(/^WOW Momos\s*-\s*/,'');
+
+/* ---------- data ---------- */
+function parseCSV(t){const out=[];let r=[],f='',q=false;t=t.replace(/^﻿/,'');
+  for(let i=0;i<t.length;i++){const c=t[i];
+    if(q){if(c=='"'){if(t[i+1]=='"'){f+='"';i++}else q=false}else f+=c}
+    else if(c=='"')q=true;else if(c==','){r.push(f);f=''}else if(c=='\n'){r.push(f);out.push(r);r=[];f=''}else if(c!='\r')f+=c}
+  if(f||r.length){r.push(f);out.push(r)}return out}
+const raw = parseCSV($('csv').textContent.trim());
+const H = raw[0], ix = k => H.findIndex(h=>h.startsWith(k));
+const C = {date:ix('Submitted For'),store:ix('Store'),by:ix('Submitted By'),alloc:ix('Buns allocated'),burg:ix('Number of burgers'),
+  sold:ix('Number of buns sold'),exp:ix('Expected closing'),act:ix('Actual closing'),open:ix('Bun remaining'),
+  cons:ix('Actual Remaining'),vari:ix('Variance'),status:ix('Filing Status')};
+const num = v => (v===undefined||v===''||v==='-')?NaN:Number(v);
+const DATA = raw.slice(1).filter(r=>r.length>10).map(r=>{
+  const [d,m,y]=r[C.date].split('-');const dt=new Date(2000+Number(y),MON[m],Number(d));
+  const o={date:iso(dt),store:r[C.store],by:r[C.by],alloc:num(r[C.alloc]),burgers:num(r[C.burg]),sold:num(r[C.sold]),
+    exp:num(r[C.exp]),act:num(r[C.act]),open:num(r[C.open]),cons:num(r[C.cons]),v:num(r[C.vari]),
+    comment:(r[C.vari+1]||'').trim(),status:r[C.status].trim()};
+  o.comment=o.comment==='-'?'':o.comment;o.missed=isNaN(o.v);return o}).sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+const STORES=[...new Set(DATA.map(d=>d.store))].sort();
+const MIN=DATA[0].date, MAX=DATA[DATA.length-1].date;
+
+/* ---------- reasons ---------- */
+const REASONS=[
+ [/training|new staff|trainee/i,'Training wastage'],
+ [/over ?cook|burn|toast/i,'Overcooked / burnt'],
+ [/drop|damag|tray/i,'Dropped / damaged'],
+ [/freezer|stale|spoil|expire|soggy|fung/i,'Spoilage / storage'],
+ [/staff meal/i,'Staff meals not billed'],
+ [/transfer|received/i,'Unlogged inter-store transfer'],
+ [/recount|count|missed|entry/i,'Counting / entry error']];
+function reason(r){ if(r.missed) return 'Entry missed';
+  if(!r.comment) return 'No reason given';
+  for(const [re,l] of REASONS) if(re.test(r.comment)) return l; return 'Other'}
+function sev(r){ if(r.missed) return 'miss'; if(Math.abs(r.v)<TOL) return 'ok';
+  if(r.v<0) return 'sur'; return (r.v/r.sold*100>=CRIT_PCT)?'crit':'warn'}
+const CHIP={ok:['c-ok','Within tolerance'],warn:['c-warn','Shortage'],crit:['c-crit','High shortage'],sur:['c-sur','Surplus'],miss:['c-miss','Not submitted']};
+const chip = s => `<span class="chip ${CHIP[s][0]}">${CHIP[s][1]}</span>`;
+const vcell = v => isNaN(v)?'<span class="zero">–</span>':`<span class="${v>0?'pos':v<0?'neg':'zero'}">${v===0?'0':sgn(v)}</span>`;
+
+/* ---------- filters ---------- */
+$('fStore').innerHTML='<option value="all">All stores</option>'+STORES.map(s=>`<option value="${esc(s)}">${esc(shortStore(s))}</option>`).join('');
+$('fFrom').min=$('fTo').min=MIN;$('fFrom').max=$('fTo').max=MAX;
+const addDays=(s,n)=>{const d=new Date(s+'T00:00');d.setDate(d.getDate()+n);return iso(d)};
+[['Last 7 days',7],['Last 14 days',14],['All',0]].forEach(([l,n])=>{const b=document.createElement('button');b.textContent=l;
+  b.onclick=()=>{$('fTo').value=MAX;$('fFrom').value=n?addDays(MAX,-(n-1)):MIN;render()};$('pre').appendChild(b)});
+$('fFrom').value=MIN;$('fTo').value=MAX;
+['fStore','fFrom','fTo'].forEach(i=>$(i).addEventListener('change',render));
+
+let charts={};
+function mk(id,cfg){if(charts[id])charts[id].destroy();charts[id]=new Chart($(id),cfg)}
+Chart.defaults.font.family='"Segoe UI",system-ui,sans-serif';Chart.defaults.color='#7a6d66';
+
+/* ---------- render ---------- */
+function render(){
+  let from=$('fFrom').value||MIN,to=$('fTo').value||MAX;if(from>to)[from,to]=[to,from];
+  const sel=$('fStore').value, inStore=r=>sel==='all'||r.store===sel;
+  const rows=DATA.filter(r=>inStore(r)&&r.date>=from&&r.date<=to);
+  const filed=rows.filter(r=>!r.missed);
+  const stores=STORES.filter(s=>sel==='all'||s===sel);
+  const dates=[];for(let d=from;d<=to;d=addDays(d,1))dates.push(d);
+
+  /* KPIs */
+  const sold=sum(filed,'sold'),short_=filed.reduce((a,r)=>a+Math.max(r.v,0),0),sur=filed.reduce((a,r)=>a+Math.max(-r.v,0),0);
+  const unexpl=filed.filter(r=>r.v>=TOL&&!r.comment).length, missed=rows.filter(r=>r.missed).length;
+  const late=rows.filter(r=>r.status==='DELAYED').length, ontime=rows.filter(r=>r.status==='ON TIME').length;
+  const pct=sold?short_/sold*100:0;
+  $('kpis').innerHTML=[
+   ['Buns sold (POS)',fmt(sold),`${fmt(sum(filed,'burgers'))} burgers`,''],
+   ['Shortage',fmt(short_),`${pct.toFixed(1)}% of buns sold`,pct>2?'bad':'good'],
+   ['Surplus',fmt(sur),'stock more than POS implies',''],
+   ['Net variance',sgn(short_-sur),'shortage − surplus',''],
+   ['Unexplained shortages',unexpl,`of ${filed.filter(r=>r.v>=TOL).length} shortages 6+ buns`,unexpl?'bad':'good'],
+   ['Filing compliance',rows.length?Math.round(ontime/rows.length*100)+'%':'–',`${missed} missed · ${late} delayed`,missed?'bad':'good']
+  ].map(([l,v,s,c])=>`<div class="kpi ${c}"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join('');
+
+  /* attention list */
+  const A=[];
+  const lastRows=st=>DATA.filter(r=>r.store===st&&r.date<=to);
+  const daysLeft=(()=>{const d=new Date(to+'T00:00');return new Date(d.getFullYear(),d.getMonth()+1,0).getDate()-d.getDate()})();
+  const run=stores.map(s=>runway(s,to,daysLeft)).filter(Boolean);
+  run.filter(x=>x.short>0).sort((a,b)=>a.days-b.days).forEach(x=>A.push(['crit',`${shortStore(x.store)} will run out of buns in ~${Math.max(0,x.days).toFixed(1)} day(s)`,
+    `Only ${fmt(Math.max(x.stock,0))} buns left at ${fmt(x.burn)}/day – needs about ${fmt(x.short)} more to last the ${daysLeft} remaining days of the month. Request an emergency top-up.`]));
+  stores.forEach(s=>{
+    const l=lastRows(s).filter(r=>!r.missed);
+    const w=l.slice(-7).reduce((a,r)=>a+Math.max(r.v,0),0), p=l.slice(-14,-7).reduce((a,r)=>a+Math.max(r.v,0),0);
+    const wu=l.slice(-7).filter(r=>r.v>=TOL&&!r.comment).length;
+    if(w>60&&w>2*p) A.push(['crit',`${shortStore(s)}: shortage is climbing`,`${fmt(w)} buns short in the last 7 filed days vs ${fmt(p)} the week before${wu?` – ${wu} of those days had no reason entered`:''}. Pattern points to unrecorded usage (e.g. staff meals) or leakage; audit before it grows.`]);
+    const sr=l.filter(r=>r.v<=-TOL&&r.date>=from);
+    if(sr.length>=2) A.push(['info',`${shortStore(s)}: ${sr.length} surplus days`,`${fmt(sr.reduce((a,r)=>a-r.v,0))} extra buns found in store. Reasons given point to inter-store transfers that were not logged – stock ledger of the sending store will look short.`]);
+    const ms=DATA.filter(r=>r.store===s&&r.missed&&r.date>=from&&r.date<=to).length;
+    if(ms>=2) A.push(['warn',`${shortStore(s)}: ${ms} missed entries`,`Variance on the day after a missed entry covers two days of usage, so it is harder to explain. Follow up with the store manager.`]);
+  });
+  const worstUn=filed.filter(r=>r.v>=TOL&&!r.comment).length;
+  if(worstUn) A.push(['warn',`${worstUn} shortage day(s) submitted without a reason`,'See the exception log below – rows marked "No reason given".']);
+  $('attn').innerHTML=A.length?A.map(([c,t,d])=>`<div class="a ${c}"><div><b>${esc(t)}</b><span>${esc(d)}</span></div></div>`).join(''):'<div class="a info"><div><b>All clear</b><span>No stores need attention in this range.</span></div></div>';
+
+  /* morning brief */
+  const day=to;
+  $('briefTitle').textContent=`Variance report for ${nice(day)}`;
+  $('briefNote').textContent='Last day of the selected range – what head office would see the next morning.';
+  const br=stores.map(s=>DATA.find(r=>r.store===s&&r.date===day)).filter(Boolean);
+  $('brief').innerHTML=`<tr><th>Store</th><th class="n">Burgers (POS)</th><th class="n">Buns sold</th><th class="n">Opening</th><th class="n">Expected closing</th><th class="n">Actual closing</th><th class="n">Variance</th><th>Status</th><th>Reason given by store</th></tr>`+
+   br.map(r=>`<tr><td><b>${esc(shortStore(r.store))}</b><br><i class="zero">${esc(r.by)}</i></td>
+    <td class="n">${r.missed?'':fmt(r.burgers)}</td><td class="n">${fmt(r.sold)}</td><td class="n">${r.missed?'–':fmt(r.open)}</td><td class="n">${r.missed?'–':fmt(r.exp)}</td><td class="n">${r.missed?'–':fmt(r.act)}</td>
+    <td class="n">${vcell(r.v)}</td><td>${chip(sev(r))}${r.status==='DELAYED'?' <span class="chip c-warn">Late</span>':''}</td><td class="why">${whyCell(r)}</td></tr>`).join('');
+
+  /* trend chart */
+  const bySh=dates.map(d=>filed.filter(r=>r.date===d).reduce((a,r)=>a+Math.max(r.v,0),0));
+  const bySu=dates.map(d=>-filed.filter(r=>r.date===d).reduce((a,r)=>a+Math.max(-r.v,0),0));
+  const bySo=dates.map(d=>filed.filter(r=>r.date===d).reduce((a,r)=>a+r.sold,0));
+  mk('chTrend',{data:{labels:dates.map(short),datasets:[
+    {type:'bar',label:'Shortage (buns)',data:bySh,backgroundColor:'#c62828',stack:'s',borderRadius:2},
+    {type:'bar',label:'Surplus (buns)',data:bySu,backgroundColor:'#1f5fa8',stack:'s',borderRadius:2},
+    {type:'line',label:'Shortage % of sold',data:bySh.map((v,i)=>bySo[i]?+(v/bySo[i]*100).toFixed(2):null),yAxisID:'y2',borderColor:'#f2a900',backgroundColor:'#f2a900',tension:.3,pointRadius:3}]},
+   options:{maintainAspectRatio:false,interaction:{mode:'index',intersect:false},scales:{x:{grid:{display:false},stacked:true},y:{stacked:true,title:{display:true,text:'Buns'},grid:{color:'#f0e8e0'}},
+    y2:{position:'right',grid:{display:false},title:{display:true,text:'% of sold'},ticks:{callback:v=>v+'%'}}},plugins:{legend:{position:'bottom'}}}});
+
+  /* reasons */
+  const rc={};filed.filter(r=>r.v>=TOL).forEach(r=>{const k=reason(r);rc[k]=(rc[k]||0)+r.v});
+  const rk=Object.entries(rc).sort((a,b)=>b[1]-a[1]);
+  mk('chReason',{type:'bar',data:{labels:rk.map(x=>x[0]),datasets:[{data:rk.map(x=>x[1]),backgroundColor:rk.map(x=>x[0]==='No reason given'?'#c62828':'#d9a441'),borderRadius:3}]},
+   options:{indexAxis:'y',maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.raw+' buns'}}},scales:{x:{grid:{color:'#f0e8e0'}},y:{grid:{display:false}}}}});
+
+  /* scorecard */
+  const SC=stores.map(s=>{const l=filed.filter(r=>r.store===s),a=rows.filter(r=>r.store===s);const so=sum(l,'sold'),sh=l.reduce((x,r)=>x+Math.max(r.v,0),0);
+    return {s,so,sh,su:l.reduce((x,r)=>x+Math.max(-r.v,0),0),pct:so?sh/so*100:0,un:l.filter(r=>r.v>=TOL&&!r.comment).length,ms:a.filter(r=>r.missed).length,
+      ok:a.length?a.filter(r=>r.status==='ON TIME').length/a.length*100:0,spark:dates.map(d=>{const r=l.find(x=>x.date===d);return r?r.v:0})}}).sort((a,b)=>b.pct-a.pct);
+  $('score').innerHTML=`<tr><th>Store</th><th class="n">Short</th><th class="n">%</th><th class="n">Unexpl.</th><th class="n">On-time</th><th>Trend</th></tr>`+
+   SC.map(x=>`<tr><td><b>${esc(shortStore(x.s))}</b></td><td class="n">${fmt(x.sh)}</td><td class="n"><span class="chip ${x.pct>=4?'c-crit':x.pct>=2?'c-warn':'c-ok'}">${x.pct.toFixed(1)}%</span></td>
+    <td class="n">${x.un?`<span class="nor">${x.un}</span>`:'0'}</td><td class="n">${Math.round(x.ok)}%</td><td>${spark(x.spark)}</td></tr>`).join('');
+
+  /* runway */
+  $('runway').innerHTML=`<tr><th>Store</th><th class="n">Stock</th><th class="n">Burn/day</th><th class="n">Days left</th><th>Month-end</th></tr>`+
+   run.sort((a,b)=>a.days-b.days).map(x=>`<tr><td><b>${esc(shortStore(x.store))}</b></td><td class="n">${fmt(Math.max(x.stock,0))}</td><td class="n">${fmt(x.burn)}</td><td class="n">${x.days.toFixed(1)}</td>
+    <td>${x.short>0?`<span class="chip c-crit">Short ~${fmt(x.short)}</span>`:`<span class="chip c-ok">Covered</span>`}</td></tr>`).join('');
+  mk('chStock',{type:'line',data:{labels:dates.map(short),datasets:stores.map((s,i)=>({label:shortStore(s),spanGaps:true,tension:.2,pointRadius:0,borderWidth:2,
+    borderColor:PALETTE[STORES.indexOf(s)%6],data:dates.map(d=>{const r=DATA.find(x=>x.store===s&&x.date===d);return r&&!r.missed?r.act:null})}))},
+   options:{maintainAspectRatio:false,interaction:{mode:'index',intersect:false},plugins:{legend:{position:'bottom'}},scales:{x:{grid:{display:false}},y:{title:{display:true,text:'Closing buns in store'},grid:{color:'#f0e8e0'}}}}});
+
+  /* exception log */
+  const ex=rows.filter(r=>r.missed||Math.abs(r.v)>=TOL).sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:b.v-a.v);
+  $('exc').innerHTML=`<tr><th>Date</th><th>Store</th><th class="n">Buns sold</th><th class="n">Expected</th><th class="n">Actual</th><th class="n">Variance</th><th>Status</th><th>Reason category</th><th>Store's comment</th></tr>`+
+   (ex.length?ex.map(r=>{const rs=reason(r);return `<tr><td>${short(r.date)}</td><td>${esc(shortStore(r.store))}</td><td class="n">${fmt(r.sold)}</td><td class="n">${r.missed?'–':fmt(r.exp)}</td><td class="n">${r.missed?'–':fmt(r.act)}</td>
+    <td class="n">${vcell(r.v)}</td><td>${chip(sev(r))}</td><td>${rs==='No reason given'?`<span class="nor">${rs}</span>`:rs}</td><td class="why">${r.comment?esc(r.comment):'<i>–</i>'}</td></tr>`}).join(''):'<tr><td colspan="9">No exceptions in this range.</td></tr>');
+}
+function whyCell(r){ if(r.missed) return '<span class="nor">Store did not submit today\'s count</span>';
+  if(Math.abs(r.v)<TOL) return '<i>Within tolerance</i>';
+  return r.comment?esc(r.comment):'<span class="nor">No reason given</span>'}
+function sum(a,k){return a.reduce((x,r)=>x+(r[k]||0),0)}
+function runway(store,to,daysLeft){
+  const l=DATA.filter(r=>r.store===store&&r.date<=to);const f=l.filter(r=>!r.missed);if(!f.length)return null;
+  const last=f[f.length-1];const after=l.filter(r=>r.date>last.date);           // missed days after last count
+  const stock=last.act-after.reduce((a,r)=>a+r.sold,0);
+  const burn=l.slice(-7).reduce((a,r)=>a+r.sold,0)/Math.min(7,l.length);
+  const days=stock/burn;return {store,stock,burn,days,short:Math.max(0,Math.round(burn*daysLeft-stock))}}
+function spark(v){const w=6,h=26,m=Math.max(20,...v.map(Math.abs));
+  return `<svg width="${v.length*w}" height="${h}" style="display:block">`+v.map((x,i)=>{const bh=Math.min(h/2,Math.abs(x)/m*(h/2));
+   return `<rect x="${i*w}" y="${x>=0?h/2-bh:h/2}" width="${w-1.5}" height="${Math.max(bh,x?1:0)}" fill="${x>=TOL?'#c62828':x<=-TOL?'#1f5fa8':'#cbbfb6'}"/>`}).join('')+`<line x1="0" x2="${v.length*w}" y1="${h/2}" y2="${h/2}" stroke="#eadfd6"/></svg>`}
+render();
+</script>
+</body>
+</html>
